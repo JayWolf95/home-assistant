@@ -30,6 +30,8 @@ _LOGGER = logging.getLogger(__name__)
 
 DEPENDENCIES = ['mqtt']
 
+ATTR_OPERATING_STATE = 'operating_state'
+
 DEFAULT_NAME = 'MQTT HVAC'
 
 CONF_POWER_COMMAND_TOPIC = 'power_command_topic'
@@ -48,6 +50,7 @@ CONF_HOLD_COMMAND_TOPIC = 'hold_command_topic'
 CONF_HOLD_STATE_TOPIC = 'hold_state_topic'
 CONF_AUX_COMMAND_TOPIC = 'aux_command_topic'
 CONF_AUX_STATE_TOPIC = 'aux_state_topic'
+CONF_OPERATING_STATE_TOPIC = 'operating_state_topic'
 
 CONF_CURRENT_TEMPERATURE_TOPIC = 'current_temperature_topic'
 
@@ -93,6 +96,7 @@ PLATFORM_SCHEMA = SCHEMA_BASE.extend({
     vol.Optional(CONF_SEND_IF_OFF, default=True): cv.boolean,
     vol.Optional(CONF_PAYLOAD_ON, default="ON"): cv.string,
     vol.Optional(CONF_PAYLOAD_OFF, default="OFF"): cv.string,
+    vol.Optional(CONF_OPERATING_STATE_TOPIC): mqtt.valid_subscribe_topic,
 })
 
 
@@ -121,7 +125,8 @@ def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
                     CONF_AWAY_MODE_STATE_TOPIC,
                     CONF_HOLD_STATE_TOPIC,
                     CONF_AUX_STATE_TOPIC,
-                    CONF_CURRENT_TEMPERATURE_TOPIC
+                    CONF_CURRENT_TEMPERATURE_TOPIC,
+                    CONF_OPERATING_STATE_TOPIC
                 )
             },
             config.get(CONF_QOS),
@@ -134,7 +139,8 @@ def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
             STATE_OFF, STATE_OFF, False,
             config.get(CONF_SEND_IF_OFF),
             config.get(CONF_PAYLOAD_ON),
-            config.get(CONF_PAYLOAD_OFF))
+            config.get(CONF_PAYLOAD_OFF),
+            config.get(ATTR_OPERATING_STATE))
     ])
 
 
@@ -145,7 +151,7 @@ class MqttClimate(ClimateDevice):
                  fan_mode_list, swing_mode_list, target_temperature, away,
                  hold, current_fan_mode, current_swing_mode,
                  current_operation, aux, send_if_off, payload_on,
-                 payload_off):
+                 payload_off, operating_state):
         """Initialize the climate device."""
         self.hass = hass
         self._name = name
@@ -168,6 +174,7 @@ class MqttClimate(ClimateDevice):
         self._send_if_off = send_if_off
         self._payload_on = payload_on
         self._payload_off = payload_off
+        self._operating_state = operating_state
 
     def async_added_to_hass(self):
         """Handle being added to home assistant."""
@@ -286,6 +293,17 @@ class MqttClimate(ClimateDevice):
                 self.hass, self._topic[CONF_HOLD_STATE_TOPIC],
                 handle_hold_mode_received, self._qos)
 
+        @callback
+        def handle_operating_state_recieved(topic, payload, qos):
+            """Handle recieving operating state via MQTT."""
+            self._operating_state = payload
+            self.async_schedule_update_ha_state()
+
+        if self._topic[CONF_OPERATING_STATE_TOPIC] is not None:
+            yield from mqtt.async_subscribe(
+                self.hass, self._topic[CONF_OPERATING_STATE_TOPIC],
+                handle_operating_state_recieved, self._qos)
+
     @property
     def should_poll(self):
         """Return the polling state."""
@@ -315,6 +333,10 @@ class MqttClimate(ClimateDevice):
     def current_operation(self):
         """Return current operation ie. heat, cool, idle."""
         return self._current_operation
+
+    def operating_state(self):
+        """Return current operating state."""
+        return self._operating_state
 
     @property
     def operation_list(self):
@@ -520,3 +542,13 @@ class MqttClimate(ClimateDevice):
             support |= SUPPORT_AUX_HEAT
 
         return support
+
+    @property
+    def device_state_attributes(self):
+        """Return the device specific state attributes."""
+        if self._operating_state:
+            return {
+                "operating_state": self._operating_state,
+            }
+        else:
+            return {}
